@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+
+# Data & Artifacts
+data/
+artifacts/
+runs/
+assets/heatmaps/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Checkpoints / Models
+*.pt
+*.pth
+*.ckpt
+*.h5
+
+# Numpy / Torch Dumps
+*.npy
+*.npz
+
+# Compressed files (in case they slipped in)
+*.zip
+*.tar
+*.tar.gz
+
+# Build / Distribution
+build/
+dist/
