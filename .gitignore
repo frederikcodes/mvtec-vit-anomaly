@@ -41,3 +41,9 @@ Thumbs.db
 # Build / Distribution
 build/
 dist/
+
+
+# Ignore feature directories (heavy output files)
+featurebanks/
+features_dinov2_b14/
+features_mae_b16/
