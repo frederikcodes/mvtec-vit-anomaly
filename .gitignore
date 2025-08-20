@@ -47,3 +47,6 @@ dist/
 featurebanks/
 features_dinov2_b14/
 features_mae_b16/
+
+#Ignore cached dicts
+cached_dicts/

@@ -124,13 +124,14 @@ class DinoFeatureExtractor:
         pd.DataFrame(metas).to_csv(out_csv, index=False)
 
 # ========== MAE EXTRACTOR ==========
+# ========== MAE EXTRACTOR (masking disabled, 256x256 via processor) ==========
 class MAEFeatureExtractor:
     def __init__(self, model_name="facebook/vit-mae-base", project_dir=Path("/content/drive/MyDrive")):
         self.model = AutoModel.from_pretrained(model_name).to(DEVICE).eval()
         self.processor = AutoImageProcessor.from_pretrained(model_name)
         self.feat_dim = 768
-        self.patch_size = getattr(self.model.config, "patch_size", 16)
-        self.img_size = 16 * self.patch_size
+        self.patch_size = getattr(self.model.config, "patch_size", 16)  # 16 for ViT-B/16
+        self.img_size = 16 * self.patch_size                            # 256 px
         self.project_dir = Path(project_dir)
         self.feat_dir = self.project_dir / "features_mae_b16"
         self.bank_dir = self.project_dir / "featurebanks" / "mae_b16"
@@ -139,19 +140,41 @@ class MAEFeatureExtractor:
 
     @torch.no_grad()
     def extract(self, batch_img_tensor: torch.Tensor) -> torch.Tensor:
+        """
+        - Uses HF AutoImageProcessor for resizing/normalization to 256x256
+        - Disables MAE masking (bool_masked_pos=None) → all 256 patches are visible
+        - Returns normalized global features (mean over all patch embeddings)
+        """
+        # Convert batch of CHW tensors -> list of HWC numpy arrays in [0,1]
         imgs_np = [(img.clamp(0, 1).permute(1, 2, 0).cpu().numpy()) for img in batch_img_tensor]
-        inputs = self.processor(images=imgs_np, return_tensors="pt").to(DEVICE)
-        out = self.model(**inputs).last_hidden_state
-        feats = out[:, 1:, :].mean(dim=1)
+
+        # Processor handles resize & normalization (no center crop, fixed 256x256)
+        inputs = self.processor(
+            images=imgs_np,
+            return_tensors="pt",
+            do_center_crop=False,
+            size={"height": self.img_size, "width": self.img_size},
+        ).to(DEVICE)
+
+        # Disable masking: bool_masked_pos=None ensures all patches are processed
+        outputs = self.model(pixel_values=inputs["pixel_values"], bool_masked_pos=None)
+        hidden = outputs.last_hidden_state  # [B, 1+P, 768] (CLS + patches)
+
+        # Global feature = mean over all patch embeddings (excluding CLS)
+        patch_tokens = hidden[:, 1:, :]     # [B, 256, 768]
+        feats = patch_tokens.mean(dim=1)    # [B, 768]
+
         return F.normalize(feats, dim=1)
 
     def run_all(self, cat: str, data_dir: Path, batch_size=128, overwrite=False):
         out_npz = self.feat_dir / f"{cat}_mae_b16.npz"
         out_csv = self.feat_dir / f"{cat}_meta.csv"
-        if not overwrite and out_npz.exists(): return
+        if not overwrite and out_npz.exists():
+            return
 
+        # For MAE we skip torchvision transforms -> processor does resize/normalize
         paths, labels, cats, splits = collect_images(data_dir / cat, cat)
-        ds = ImagePathDataset(paths, labels, cats, splits, preprocess)
+        ds = ImagePathDataset(paths, labels, cats, splits, transform=None)
         dl = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collate_keep_meta)
         feats, metas = [], []
 
@@ -162,20 +185,23 @@ class MAEFeatureExtractor:
                 feats.append(f)
                 metas.extend(metas_batch)
 
-        np.savez_compressed(out_npz, features=np.concatenate(feats))
+        np.savez_compressed(out_npz, features=np.concatenate(feats, axis=0))
         pd.DataFrame(metas).to_csv(out_csv, index=False)
 
     def run_bank(self, cat: str, data_dir: Path, batch_size=128, overwrite=False):
         out_npz = self.bank_dir / f"{cat}_bank_mae_b16.npz"
         out_csv = self.bank_dir / f"{cat}_bank_meta.csv"
-        if not overwrite and out_npz.exists(): return
+        if not overwrite and out_npz.exists():
+            return
 
         good_dir = data_dir / cat / "train" / "good"
         paths = sorted(good_dir.rglob("*.png"))
         labels = ["good"] * len(paths)
         cats = [cat] * len(paths)
         splits = ["train"] * len(paths)
-        ds = ImagePathDataset(paths, labels, cats, splits, preprocess)
+
+        # Again: no torchvision transforms, processor handles everything
+        ds = ImagePathDataset(paths, labels, cats, splits, transform=None)
         dl = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collate_keep_meta)
         feats, metas = [], []
 
@@ -186,8 +212,9 @@ class MAEFeatureExtractor:
                 feats.append(f)
                 metas.extend(metas_batch)
 
-        np.savez_compressed(out_npz, features=np.concatenate(feats))
+        np.savez_compressed(out_npz, features=np.concatenate(feats, axis=0))
         pd.DataFrame(metas).to_csv(out_csv, index=False)
+
 
 # ========== FACTORY ==========
 def get_feature_extractor(name: str, project_dir=Path("/content/drive/MyDrive")):
