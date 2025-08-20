@@ -50,3 +50,7 @@ features_mae_b16/
 
 #Ignore cached dicts
 cached_dicts/
+
+#Ignore scores
+scores_knn/
+scores_mahalanobis/
