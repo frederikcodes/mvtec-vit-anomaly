@@ -40,17 +40,22 @@ The goal is to detect manufacturing defects **without labeled anomalies**, lever
 
 ```
 mvtec-vit-anomaly/
-├─ data/                     # MVTec dataset (not included in repo)
+├─ data/                     # (not included) raw MVTec dataset (train/test images & masks)
 ├─ src/
-│  ├─ data.py                # Dataset loading, preprocessing
-│  ├─ features_vit.py        # Feature extraction (DINOv2, MAE, ResNet)
-│  ├─ scoring.py             # KNN & Mahalanobis anomaly scoring
-│  ├─ eval.py                # Evaluation metrics (AUROC, PRO)
-│  ├─ app.py                 # Streamlit demo (planned)
-├─ features_dinov2_b14/      # Extracted ViT features (npz + meta.csv)
-├─ features_mae_b16/         # Extracted MAE features (npz + meta.csv)
-├─ scores_knn/               # KNN-based anomaly scores (CSV)
-├─ scores_mahalanobis/       # Mahalanobis-based anomaly scores (CSV)
+│  ├─ features_vit.py        # ViT feature extraction (DINOv2, MAE) + ResNet baseline
+│  ├─ scoring.py             # Anomaly scoring methods (KNN, Mahalanobis)
+│  ├─ eval.py                # Evaluation metrics (AUROC, PRO, PR curves)
+│  ├─ app.py                 # Streamlit demo interface (planned)
+├─ featurebanks/             # (not included) precomputed feature banks (npz + meta.csv)
+├─ notebooks/
+│  ├─ 00_eda.ipynb           # Exploratory data analysis (ResNet + KMeans baseline)
+│  ├─ 01_feature_extraction_and_preview.ipynb  # Extract ViT/MAE features & preview embeddings
+│  ├─ 02_scoring_heatmaps.ipynb                 # Anomaly scoring and heatmap visualization
+├─ cached_dicts/             # (not included) cached embeddings/dictionaries for fast scoring
+├─ features_dinov2_b14/      # (not included) extracted DINOv2-B/14 features
+├─ features_mae_b16/         # (not included) extracted MAE-B/16 features
+├─ scores_knn/               # (not included) KNN-based anomaly scores (CSV per category)
+├─ scores_mahalanobis/       # (not included) Mahalanobis-based anomaly scores (CSV per category)
 ├─ README.md                 # Project documentation
 ```
 
