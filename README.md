@@ -29,7 +29,7 @@ The goal is to detect manufacturing defects **without labeled anomalies**, lever
 - **Mahalanobis Distance** (with optional PCA & shrinkage)
 - Both at **image-level** and **patch-level**
 
-#### 🔹 Heatmaps (in progress)
+#### 🔹 Heatmaps
 - Map patch-level anomaly scores to a spatial grid (e.g., 16×16)
 - Bilinear interpolation to original image resolution
 - Visualization as heatmaps for localizing defects
@@ -56,6 +56,8 @@ mvtec-vit-anomaly/
 ├─ features_mae_b16/         # (not included) extracted MAE-B/16 features
 ├─ scores_knn/               # (not included) KNN-based anomaly scores (CSV per category)
 ├─ scores_mahalanobis/       # (not included) Mahalanobis-based anomaly scores (CSV per category)
+├─ assets/
+│  ├─ heatmaps/              # qualitative examples of heatmaps (triplet comparisons)
 ├─ README.md                 # Project documentation
 ```
 
@@ -103,7 +105,32 @@ This section documents common issues encountered during feature extraction — a
 - **ResNet50 + KMeans**: Separates `good` vs. `defect` at a coarse level.
 - **ViT Embeddings** (DINOv2, MAE) show **clear improvements** in anomaly separability.
 - **Image-level scores** already demonstrate good performance (`defect > good` on mean scores).
-- Next step: **Heatmaps** for pixel-level evaluation.
+
+#### 🔥 Qualitative Heatmap Results
+
+We also generated **patch-based anomaly heatmaps** for all models.  
+Each triplet shows (left → right):
+
+1. Original image (aligned to backbone input size)  
+2. Predicted anomaly heatmap (overlay)  
+3. Ground-truth mask  
+
+Below is an example from the `bottle` category (`broken_large` defect), comparing all four method/backbone combinations:
+
+![Heatmap Comparison](assets/heatmaps/triplets_fixed_example_vertical.png)
+
+**Observations:**
+- **DINO (both KNN & Mahalanobis)**:  
+  Clear localization of the defective region; heatmaps align well with ground-truth.  
+  - KNN → slightly more scattered activations (patch-wise).  
+  - Mahalanobis → smoother, more globally consistent maps.  
+- **MAE (both KNN & Mahalanobis)**:  
+  Heatmaps are much less informative, often showing random activations not aligned with the defect.  
+  → MAE features are weaker for spatial localization, though they can still separate *good vs. defect* at image level.  
+
+**Conclusion:**  
+For **localization**, DINO features are clearly superior.  
+MAE embeddings mainly help on a global (image-level) scale but lack fine-grained patch information.
 
 ---
 
@@ -142,6 +169,8 @@ This section documents common issues encountered during feature extraction — a
 
 This project demonstrates how **self-supervised Vision Transformers** can be used for **unsupervised anomaly detection** in industrial quality inspection.  
 By combining **strong embeddings** with **distance-based anomaly scoring**, we can detect defects with high accuracy — without relying on labeled anomaly data.
+
+
 
 ---
 
