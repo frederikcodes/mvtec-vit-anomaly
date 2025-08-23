@@ -9,7 +9,6 @@ __pycache__/
 data/
 artifacts/
 runs/
-assets/heatmaps/
 
 # Notebooks
 .ipynb_checkpoints/
@@ -54,3 +53,7 @@ cached_dicts/
 #Ignore scores
 scores_knn/
 scores_mahalanobis/
+
+#triplets
+triplets_knn/
+triplets_mahalanobis/

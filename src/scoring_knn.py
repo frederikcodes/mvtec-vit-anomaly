@@ -6,6 +6,8 @@ KNN image-level scoring on MVTec-style patch embeddings using FAISS.
 - Optional PCA dimensionality reduction (trained once per backbone on a sample).
 - Uses cosine (recommended) or L2 distance.
 - Saves one CSV per backbone with one row per *test* image.
+- (NEW) Optional: save per-image patch scores as .npz with mirrored dataset paths:
+    patch_scores/<backbone>/<category>/<split>/<raw_label>/<filename>.png.npz
 
 Expected cache layout (created by your feature extraction step):
     <CACHE_DIR>/<backbone>/<category>_features.pkl
@@ -23,7 +25,7 @@ Usage (from a notebook or a small CLI):
     from pathlib import Path
     from src.scoring_knn import score_backbone_streaming
 
-    CACHE_DIR = Path("/content/cached_dicts")     # local (fast) copy
+    CACHE_DIR = Path("/content/cached_dicts")
     OUT_DIR   = Path("/content/drive/MyDrive/scores_knn")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -36,7 +38,8 @@ Usage (from a notebook or a small CLI):
         topk_image=5,
         batch_size=20000,
         pca_dim=128,             # None to disable PCA
-        use_fp16_gpu=True        # saves VRAM on GPU
+        use_fp16_gpu=True,       # saves VRAM on GPU
+        save_patch_scores=True,  # NEW: also write per-image .npz
     )
 """
 
@@ -85,6 +88,15 @@ def l2_normalize(x: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     """
     n = np.linalg.norm(x, axis=1, keepdims=True) + eps
     return x / n
+
+
+def _infer_hw(P: int) -> Tuple[int, int]:
+    """
+    Infer a (H, W) grid from number of patches P (e.g., 256 -> 16x16).
+    Falls back to (1, P) if P is not a perfect square.
+    """
+    r = int(np.sqrt(P))
+    return (r, r) if r * r == P else (1, P)
 
 
 # ---------------------- FAISS index builders ------------------- #
@@ -143,18 +155,18 @@ def train_pca_on_sample(
     categories: List[str],
     pca_dim: int,
     sample_cap: int = 200_000,
-    whitening_power: float = 0.0,  # set to -0.5 for whitening
+    eigen_power: float = 0.0,  # set to -0.5 for whitening
 ) -> Optional[faiss.PCAMatrix]:
     """
     Train a FAISS PCA matrix on a sample of bank vectors (from the first category).
 
     Args:
-        cache_dir:        root dir of cached_dicts
-        backbone:         e.g., "dino" or "mae"
-        categories:       list of category names
-        pca_dim:          output dimension (e.g., 128)
-        sample_cap:       max number of vectors to train PCA on
-        whitening_power:  eigen_power for FAISS PCA; 0.0 = no whitening, -0.5 ≈ whitening
+        cache_dir:   root dir of cached_dicts
+        backbone:    e.g., "dino" or "mae"
+        categories:  list of category names
+        pca_dim:     output dimension (e.g., 128)
+        sample_cap:  max number of vectors to train PCA on
+        eigen_power: 0.0 = no whitening, -0.5 ≈ whitening
 
     Returns:
         faiss.PCAMatrix or None if pca_dim is None
@@ -171,7 +183,7 @@ def train_pca_on_sample(
     ntrain = min(sample_cap, sb.shape[0])
     idx = np.random.choice(sb.shape[0], size=ntrain, replace=False)
 
-    pca = faiss.PCAMatrix(sb.shape[1], pca_dim, whitening_power)  # eigen_power
+    pca = faiss.PCAMatrix(sb.shape[1], pca_dim, eigen_power)
     pca.train(sb[idx].astype(np.float32))
     assert pca.is_trained
     del sb
@@ -191,6 +203,22 @@ def apply_pca_inplace(x: np.ndarray, pca: Optional[faiss.PCAMatrix]) -> np.ndarr
     return np.ascontiguousarray(y)
 
 
+# --------------------- path helper for NPZ --------------------- #
+def _save_path_for_npz(patch_out_root: Path, meta_row) -> Path:
+    """
+    Mirror dataset structure to avoid filename collisions:
+    patch_scores/<backbone>/<category>/<split>/<raw_label>/<filename>.png.npz
+    """
+    p = Path(str(meta_row["path"]))
+    cat   = str(meta_row["category"])
+    split = str(meta_row["split"]).lower()
+    raw   = str(meta_row["raw_label"])
+    fname = p.name  # e.g., "000.png"
+    save_dir = patch_out_root / cat / split / raw
+    save_dir.mkdir(parents=True, exist_ok=True)
+    return save_dir / f"{fname}.npz"
+
+
 # --------------------- scoring (streaming) --------------------- #
 def score_backbone_streaming(
     cache_dir: Path,
@@ -202,10 +230,12 @@ def score_backbone_streaming(
     batch_size: int = 20_000,
     pca_dim: Optional[int] = None,
     use_fp16_gpu: bool = True,
+    save_patch_scores: bool = True,
+    patch_out_root: Optional[Path] = None,
 ) -> Path:
     """
     Stream over categories for one backbone, compute image-level scores for test images,
-    and append results to a single CSV.
+    append results to a single CSV, and (optionally) write per-image patch scores as .npz.
 
     Args:
         cache_dir:   root of cached_dicts
@@ -217,11 +247,19 @@ def score_backbone_streaming(
         batch_size:  query batch size for FAISS search
         pca_dim:     None (no PCA) or output dimension (e.g., 128)
         use_fp16_gpu: use FP16 storage on GPU index to save VRAM
+        save_patch_scores: if True, save .npz per test image with patch scores
+        patch_out_root: optional override for patch score root folder
+                        (default: out_dir / "patch_scores" / backbone)
 
     Returns:
         Path to the written CSV.
     """
     out_file = out_dir / f"scores_STREAM_{backbone}_{metric}_k{k_neighbors}_top{topk_image}.csv"
+    if patch_out_root is None:
+        patch_out_root = out_dir / "patch_scores" / backbone
+    if save_patch_scores:
+        patch_out_root.mkdir(parents=True, exist_ok=True)
+
     wrote_header = False
 
     cats = list_categories(cache_dir, backbone)
@@ -234,7 +272,7 @@ def score_backbone_streaming(
         categories=cats,
         pca_dim=pca_dim,
         sample_cap=200_000,
-        whitening_power=0.0,  # set to -0.5 if you want whitening
+        eigen_power=0.0,  # set to -0.5 if you want whitening
     )
 
     for cat in cats:
@@ -255,10 +293,13 @@ def score_backbone_streaming(
         is_test = meta["split"].astype(str).str.lower().eq("test").values
         test_idx = np.where(is_test)[0]
         P, D = patches.shape[1], patches.shape[2]
+        H, W = _infer_hw(P)
 
         # Prepare queries: all test patches flattened to [N_test*P, D]
         X = patches[is_test].reshape(-1, D)
         X = apply_pca_inplace(X, pca)
+        if pca is not None:
+            D = X.shape[1]
         if use_norm:  # cosine: normalize queries too
             X = l2_normalize(X)
 
@@ -287,6 +328,25 @@ def score_backbone_streaming(
         idx_sorted = np.argsort(patch_scores_test, axis=1)
         topk_idx = idx_sorted[:, -tk:]
         img_scores = patch_scores_test[np.arange(patch_scores_test.shape[0])[:, None], topk_idx].mean(axis=1)
+
+        # Save patch scores with mirrored dataset structure
+        if save_patch_scores:
+            for j, i in enumerate(test_idx):
+                save_path = _save_path_for_npz(patch_out_root, meta.iloc[i])
+                np.savez_compressed(
+                    save_path,
+                    patch_scores=patch_scores_test[j],            # (P,)
+                    image_score=float(img_scores[j]),             # scalar
+                    grid_hw=np.array([H, W], dtype=np.int32),     # e.g., [16, 16]
+                    topk_idx=topk_idx[j].astype(np.int32),
+                    meta=dict(
+                        path=str(meta.iloc[i]["path"]),
+                        category=str(meta.iloc[i]["category"]),
+                        split=str(meta.iloc[i]["split"]),
+                        raw_label=str(meta.iloc[i]["raw_label"]),
+                        label=str(meta.iloc[i]["label"]),
+                    ),
+                )
 
         # Build per-image rows and append to CSV
         rows = []
@@ -335,12 +395,16 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=20000)
     parser.add_argument("--pca_dim", type=int, default=128)
     parser.add_argument("--no_fp16", action="store_true", help="Disable FP16 GPU index")
+    parser.add_argument("--no_save_npz", action="store_true", help="Do not write per-image .npz patch scores")
+    parser.add_argument("--patch_out_root", type=str, default=None, help="Optional override for patch score root")
 
     args = parser.parse_args()
 
     cache_dir = Path(args.cache_dir)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    patch_root = Path(args.patch_out_root) if args.patch_out_root is not None else None
 
     score_backbone_streaming(
         cache_dir=cache_dir,
@@ -352,4 +416,6 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         pca_dim=args.pca_dim if args.pca_dim > 0 else None,
         use_fp16_gpu=not args.no_fp16,
+        save_patch_scores=not args.no_save_npz,
+        patch_out_root=patch_root,
     )
